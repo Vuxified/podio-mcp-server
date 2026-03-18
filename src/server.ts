@@ -261,5 +261,78 @@ export function createServer(): McpServer {
     }
   );
 
+  server.registerTool(
+    "podio_update_item",
+    {
+      title: "Update Item",
+      description:
+        "Updates field values on an existing Podio item. Only include fields you want to change in the fields object " +
+        "— omitted fields are left unchanged. Same field format as podio_create_item.",
+      inputSchema: {
+        item_id: z.number().describe("The Podio item ID to update"),
+        fields: z
+          .record(z.string(), z.unknown())
+          .describe(
+            "Field values to update, keyed by external_id or field_id. " +
+              "Only include fields you want to change — omitted fields are left unchanged."
+          ),
+        silent: z
+          .boolean()
+          .optional()
+          .describe("If true, no notifications are generated (default: false)"),
+      },
+    },
+    async ({ item_id, fields, silent }) => {
+      log.info("podio_update_item invoked", { item_id });
+      try {
+        const response = await podioApi.put<unknown>(`/item/${item_id}`, {
+          fields,
+          silent,
+        });
+        return {
+          content: [{ type: "text" as const, text: withRateLimit(response.data) }],
+        };
+      } catch (err) {
+        log.error("podio_update_item failed:", err);
+        return toMcpError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "podio_delete_item",
+    {
+      title: "Delete Item",
+      description:
+        "Permanently deletes a Podio item. This cannot be undone. Returns confirmation of deletion.",
+      inputSchema: {
+        item_id: z.number().describe("The Podio item ID to delete"),
+        silent: z
+          .boolean()
+          .optional()
+          .describe("If true, no notifications are generated (default: false)"),
+      },
+    },
+    async ({ item_id, silent }) => {
+      log.info("podio_delete_item invoked", { item_id });
+      try {
+        await podioApi.delete(`/item/${item_id}`, {
+          params: { silent: silent ?? false },
+        });
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: withRateLimit({ deleted: true, item_id }),
+            },
+          ],
+        };
+      } catch (err) {
+        log.error("podio_delete_item failed:", err);
+        return toMcpError(err);
+      }
+    }
+  );
+
   return server;
 }
