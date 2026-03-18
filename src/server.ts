@@ -9,6 +9,8 @@ import type {
   PodioApp,
   PodioItem,
   CreateItemResponse,
+  PodioFilterResponse,
+  PodioView,
 } from "./types/podio.js";
 
 function withRateLimit(data: unknown): string {
@@ -329,6 +331,91 @@ export function createServer(): McpServer {
         };
       } catch (err) {
         log.error("podio_delete_item failed:", err);
+        return toMcpError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "podio_filter_items",
+    {
+      title: "Filter Items",
+      description:
+        "Filters items in a Podio app by field conditions. Returns paginated results with total count. " +
+        "Use numeric field_ids as filter keys (from podio_get_app). Supports sorting by 'created_on', " +
+        "'last_edit_on', or a field_id. " +
+        "NOTE: This endpoint has a stricter rate limit (250/hr vs 1000/hr standard). " +
+        "Text fields cannot be filtered — use search tools instead.",
+      inputSchema: {
+        app_id: z.number().describe("App ID to filter items in"),
+        filters: z
+          .record(z.string(), z.unknown())
+          .optional()
+          .describe(
+            "Field filters as object. Keys are numeric field_ids (as strings). " +
+              "Values depend on field type: category=[option_id, ...], number={from:X,to:Y}, " +
+              "date={from:'YYYY-MM-DD',to:'YYYY-MM-DD'}, app_reference=[item_id, ...]. " +
+              "Built-in filters: created_on, created_by. " +
+              "NOTE: Text fields cannot be filtered — use Podio search instead."
+          ),
+        limit: z
+          .number()
+          .optional()
+          .describe("Max items to return (default: 30, max: 500)"),
+        offset: z
+          .number()
+          .optional()
+          .describe("Number of items to skip for pagination (default: 0)"),
+        sort_by: z
+          .string()
+          .optional()
+          .describe(
+            "Sort field: 'created_on', 'last_edit_on', or a numeric field_id as string"
+          ),
+        sort_desc: z.boolean().optional().describe("Sort descending (default: true)"),
+        fields: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Optional list of field external_ids or field_ids to include in each item. Reduces response size."
+          ),
+      },
+    },
+    async ({ app_id, filters, limit, offset, sort_by, sort_desc, fields }) => {
+      log.info("podio_filter_items invoked", { app_id, limit, offset });
+      try {
+        const cappedLimit = Math.min(limit ?? 30, 500);
+        const response = await podioApi.post<PodioFilterResponse>(
+          `/item/app/${app_id}/filter/`,
+          {
+            filters,
+            limit: cappedLimit,
+            offset: offset ?? 0,
+            sort_by,
+            sort_desc,
+          }
+        );
+
+        let result = response.data;
+
+        if (fields && fields.length > 0) {
+          const fieldSet = new Set(fields);
+          result = {
+            ...result,
+            items: result.items.map((item) => ({
+              ...item,
+              fields: item.fields.filter(
+                (f) => fieldSet.has(f.external_id) || fieldSet.has(String(f.field_id))
+              ),
+            })),
+          };
+        }
+
+        return {
+          content: [{ type: "text" as const, text: withRateLimit(result) }],
+        };
+      } catch (err) {
+        log.error("podio_filter_items failed:", err);
         return toMcpError(err);
       }
     }
