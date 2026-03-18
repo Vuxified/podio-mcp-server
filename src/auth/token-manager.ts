@@ -33,28 +33,12 @@ export class TokenManager {
       log.info("Access token expiring soon — refreshing via refresh_token");
       await this.refresh();
     } else {
-      log.info("No token on disk — acquiring via password grant");
-      await this.acquireViaPassword();
+      throw new Error(
+        "No Podio tokens found. Run 'npm run auth' to authenticate via browser, then restart the MCP server."
+      );
     }
 
     return this.store!.access_token;
-  }
-
-  private async acquireViaPassword(): Promise<void> {
-    const resp = await axios.post<{
-      access_token: string;
-      refresh_token: string;
-      expires_in: number;
-    }>(PODIO_TOKEN_URL, {
-      grant_type: "password",
-      username: process.env.PODIO_USERNAME,
-      password: process.env.PODIO_PASSWORD,
-      client_id: process.env.PODIO_CLIENT_ID,
-      client_secret: process.env.PODIO_CLIENT_SECRET,
-      redirect_uri: process.env.PODIO_REDIRECT_URI,
-    });
-    await this.saveStore(resp.data);
-    log.info("Token acquired via password grant");
   }
 
   private async refresh(): Promise<void> {
