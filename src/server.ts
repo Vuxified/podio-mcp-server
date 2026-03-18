@@ -7,6 +7,8 @@ import type {
   PodioOrg,
   PodioSpace,
   PodioApp,
+  PodioItem,
+  CreateItemResponse,
 } from "./types/podio.js";
 
 function withRateLimit(data: unknown): string {
@@ -165,6 +167,95 @@ export function createServer(): McpServer {
         };
       } catch (err) {
         log.error("podio_get_app failed:", err);
+        return toMcpError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "podio_create_item",
+    {
+      title: "Create Item",
+      description:
+        "Creates a new item in a Podio app. The fields object maps field external_ids (or field_ids) to values. " +
+        "IMPORTANT: Call podio_get_app first to learn field types and option IDs. " +
+        "Field format varies by type: text='string', number=42, date={start:'YYYY-MM-DD'}, " +
+        "category=option_id (integer from app field settings), money={value:100,currency:'USD'}, " +
+        "app_reference=[{item_id:123}].",
+      inputSchema: {
+        app_id: z.number().describe("App ID to create the item in"),
+        fields: z
+          .record(z.string(), z.unknown())
+          .describe(
+            "Field values keyed by external_id or field_id. Use podio_get_app to learn field types and option IDs. " +
+              "Examples: text='string', number=42, date={start:'2026-04-01'}, category=option_id, money={value:100,currency:'USD'}"
+          ),
+        tags: z.array(z.string()).optional().describe("Optional tags to apply to the item"),
+        silent: z
+          .boolean()
+          .optional()
+          .describe("If true, no notifications are generated (default: false)"),
+      },
+    },
+    async ({ app_id, fields, tags, silent }) => {
+      log.info("podio_create_item invoked", { app_id });
+      try {
+        const response = await podioApi.post<CreateItemResponse>(
+          `/item/app/${app_id}/`,
+          { fields, tags, silent }
+        );
+        return {
+          content: [{ type: "text" as const, text: withRateLimit(response.data) }],
+        };
+      } catch (err) {
+        log.error("podio_create_item failed:", err);
+        return toMcpError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "podio_get_item",
+    {
+      title: "Get Item",
+      description:
+        "Retrieves a Podio item by ID. Optionally pass a fields array of external_ids or field_ids to return only " +
+        "specific fields (reduces response size). Does NOT mark the item as viewed (preserves notifications).",
+      inputSchema: {
+        item_id: z.number().describe("The Podio item ID"),
+        fields: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Optional list of field external_ids or field_ids to include. If omitted, all fields are returned. " +
+              "Use this to reduce response size."
+          ),
+      },
+    },
+    async ({ item_id, fields }) => {
+      log.info("podio_get_item invoked", { item_id, fields });
+      try {
+        const response = await podioApi.get<PodioItem>(`/item/${item_id}`, {
+          params: { mark_as_viewed: false },
+        });
+
+        let result = response.data;
+
+        if (fields && fields.length > 0) {
+          const fieldSet = new Set(fields);
+          result = {
+            ...result,
+            fields: result.fields.filter(
+              (f) => fieldSet.has(f.external_id) || fieldSet.has(String(f.field_id))
+            ),
+          };
+        }
+
+        return {
+          content: [{ type: "text" as const, text: withRateLimit(result) }],
+        };
+      } catch (err) {
+        log.error("podio_get_item failed:", err);
         return toMcpError(err);
       }
     }
