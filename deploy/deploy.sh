@@ -137,35 +137,25 @@ PUBLIC_IP=$(aws ec2 describe-addresses \
 echo "[deploy] Elastic IP associated: $PUBLIC_IP"
 echo ""
 
-# ── 1d. Route53 DNS ───────────────────────────────────────────────────────────
-echo "[deploy] Updating Route53 DNS..."
+# ── 1d. DNS check (Vercel-managed) ────────────────────────────────────────────
+# DNS for example.com is managed via Vercel, not Route53.
+# The Elastic IP is static, so DNS only needs to be set once in Vercel dashboard.
+echo "[deploy] Checking DNS for $DOMAIN..."
 
-HOSTED_ZONE_ID=$(aws route53 list-hosted-zones \
-  --query 'HostedZones[?Name==`example.com.`].Id' \
-  --output text | sed 's|/hostedzone/||')
+CURRENT_DNS=$(dig +short "$DOMAIN" A 2>/dev/null | head -1 || true)
 
-aws route53 change-resource-record-sets \
-  --hosted-zone-id "$HOSTED_ZONE_ID" \
-  --change-batch "{
-    \"Changes\": [{
-      \"Action\": \"UPSERT\",
-      \"ResourceRecordSet\": {
-        \"Name\": \"$DOMAIN\",
-        \"Type\": \"A\",
-        \"TTL\": 60,
-        \"ResourceRecords\": [{\"Value\": \"$PUBLIC_IP\"}]
-      }
-    }]
-  }" > /dev/null
-
-echo "[deploy] DNS updated: $DOMAIN -> $PUBLIC_IP"
-echo ""
-
-# ── DNS propagation wait (first provision only) ───────────────────────────────
-if [ "$NEWLY_PROVISIONED" = "true" ]; then
-  echo "[deploy] New instance detected — waiting 90s for DNS propagation before Certbot..."
-  sleep 90
+if [ "$CURRENT_DNS" = "$PUBLIC_IP" ]; then
+  echo "[deploy] DNS OK: $DOMAIN -> $PUBLIC_IP"
+else
+  echo "[deploy] ⚠ DNS mismatch: $DOMAIN -> ${CURRENT_DNS:-<no record>} (expected $PUBLIC_IP)"
+  echo "[deploy] Update the A record for $DOMAIN in Vercel DNS dashboard to: $PUBLIC_IP"
+  if [ "$NEWLY_PROVISIONED" = "true" ]; then
+    echo "[deploy] Waiting for DNS update — Certbot needs $DOMAIN to resolve to $PUBLIC_IP"
+    echo "[deploy] Update DNS in Vercel now, then press Enter to continue..."
+    read -r
+  fi
 fi
+echo ""
 
 # ── Between phases: SSH connection retry loop ─────────────────────────────────
 echo "[deploy] Verifying SSH connectivity (up to 10 attempts)..."
