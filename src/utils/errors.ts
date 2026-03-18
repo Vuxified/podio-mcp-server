@@ -26,7 +26,7 @@ export function toMcpError(err: unknown): McpErrorResponse {
       // Podio uses 420 for rate limiting — NOT 429 (HTTP standard).
       text = `Podio rate limit exceeded (HTTP 420). Wait approximately 60 seconds before retrying. The server tracks remaining calls via X-Rate-Limit-Remaining headers.`;
     } else if (status === 401) {
-      text = `Podio authentication failed (401). The access token is invalid or expired. The server will attempt to refresh on the next call. If this persists, check PODIO_USERNAME and PODIO_PASSWORD in .env.`;
+      text = `Podio authentication failed (401). The access token is invalid or expired. The server will attempt to refresh on the next call. If this persists, run 'npm run auth' to re-authenticate.`;
     } else if (status === 403) {
       text = `Podio authorization denied (403). The authenticated user lacks permission for this operation.`;
     } else if (status === 404) {
@@ -39,7 +39,11 @@ export function toMcpError(err: unknown): McpErrorResponse {
       text = `Network error connecting to Podio: ${err.message}. Check your internet connection and that api.podio.com is reachable.`;
     }
   } else if (err instanceof Error) {
-    text = `Internal server error: ${err.message}`;
+    if (err.message.includes("npm run auth")) {
+      text = err.message;
+    } else {
+      text = `Internal server error: ${err.message}`;
+    }
   } else {
     text = `Unknown error: ${String(err)}`;
   }
