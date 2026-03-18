@@ -421,5 +421,107 @@ export function createServer(): McpServer {
     }
   );
 
+  server.registerTool(
+    "podio_list_views",
+    {
+      title: "List Views",
+      description:
+        "Lists all saved views for a Podio app. Returns view IDs, names, and item counts. " +
+        "Use view IDs with podio_filter_items_by_view to filter items using a saved view's criteria.",
+      inputSchema: {
+        app_id: z.number().describe("App ID to list views for"),
+        include_standard_views: z
+          .boolean()
+          .optional()
+          .describe("Include built-in views like 'All items' (default: true)"),
+      },
+    },
+    async ({ app_id, include_standard_views }) => {
+      log.info("podio_list_views invoked", { app_id });
+      try {
+        const response = await podioApi.get<PodioView[]>(`/view/app/${app_id}/`, {
+          params: { include_standard_views: include_standard_views ?? true },
+        });
+        return {
+          content: [{ type: "text" as const, text: withRateLimit(response.data) }],
+        };
+      } catch (err) {
+        log.error("podio_list_views failed:", err);
+        return toMcpError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "podio_filter_items_by_view",
+    {
+      title: "Filter Items by View",
+      description:
+        "Filters items using a saved Podio view's criteria. The view defines the filter conditions — " +
+        "you only need to specify pagination and sorting. " +
+        "Use podio_list_views first to discover available view IDs.",
+      inputSchema: {
+        app_id: z.number().describe("App ID containing the view"),
+        view_id: z.number().describe("View ID (from podio_list_views)"),
+        limit: z
+          .number()
+          .optional()
+          .describe("Max items to return (default: 30, max: 500)"),
+        offset: z
+          .number()
+          .optional()
+          .describe("Number of items to skip for pagination (default: 0)"),
+        sort_by: z
+          .string()
+          .optional()
+          .describe("Sort field: 'created_on', 'last_edit_on', or a numeric field_id"),
+        sort_desc: z.boolean().optional().describe("Sort descending (default: true)"),
+        fields: z
+          .array(z.string())
+          .optional()
+          .describe(
+            "Optional list of field external_ids or field_ids to include. Reduces response size."
+          ),
+      },
+    },
+    async ({ app_id, view_id, limit, offset, sort_by, sort_desc, fields }) => {
+      log.info("podio_filter_items_by_view invoked", { app_id, view_id, limit, offset });
+      try {
+        const cappedLimit = Math.min(limit ?? 30, 500);
+        const response = await podioApi.post<PodioFilterResponse>(
+          `/item/app/${app_id}/filter/${view_id}/`,
+          {
+            limit: cappedLimit,
+            offset: offset ?? 0,
+            sort_by,
+            sort_desc,
+          }
+        );
+
+        let result = response.data;
+
+        if (fields && fields.length > 0) {
+          const fieldSet = new Set(fields);
+          result = {
+            ...result,
+            items: result.items.map((item) => ({
+              ...item,
+              fields: item.fields.filter(
+                (f) => fieldSet.has(f.external_id) || fieldSet.has(String(f.field_id))
+              ),
+            })),
+          };
+        }
+
+        return {
+          content: [{ type: "text" as const, text: withRateLimit(result) }],
+        };
+      } catch (err) {
+        log.error("podio_filter_items_by_view failed:", err);
+        return toMcpError(err);
+      }
+    }
+  );
+
   return server;
 }
