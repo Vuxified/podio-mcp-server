@@ -1,5 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { readFile } from "fs/promises";
+import { basename } from "path";
 import { podioApi, lastRateLimit } from "./client/podio-client.js";
 import { toMcpError } from "./utils/errors.js";
 import { log } from "./utils/logger.js";
@@ -15,6 +17,7 @@ import type {
   CreateHookResponse,
   PodioComment,
   AddCommentResponse,
+  UploadFileResponse,
 } from "./types/podio.js";
 
 function withRateLimit(data: unknown): string {
@@ -716,6 +719,72 @@ export function createServer(): McpServer {
         };
       } catch (err) {
         log.error("podio_delete_webhook failed:", err);
+        return toMcpError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "podio_attach_file",
+    {
+      title: "Attach File to Item",
+      description:
+        "Uploads a local file and attaches it to a Podio item in one operation. " +
+        "Provide the absolute file path on disk and the target item ID. " +
+        "The file is uploaded via multipart to Podio's file API, then attached to the item. " +
+        "Returns the file ID, name, size, and download link. Maximum file size: 100MB.",
+      inputSchema: {
+        file_path: z
+          .string()
+          .describe("Absolute path to the file on disk (e.g., /Users/me/report.pdf)"),
+        item_id: z.number().describe("The Podio item ID to attach the file to"),
+        filename: z
+          .string()
+          .optional()
+          .describe("Override filename (defaults to the file's basename)"),
+      },
+    },
+    async ({ file_path, item_id, filename }) => {
+      log.info("podio_attach_file invoked", { file_path, item_id });
+      try {
+        const resolvedFilename = filename ?? basename(file_path);
+
+        // Step 1 — Upload via multipart/form-data
+        const fileBuffer = await readFile(file_path);
+        const blob = new Blob([fileBuffer]);
+        const form = new FormData();
+        form.append("source", blob, resolvedFilename);
+        form.append("filename", resolvedFilename);
+
+        const uploadResp = await podioApi.post<UploadFileResponse>(
+          "/file/",
+          form,
+          { headers: { "Content-Type": "multipart/form-data" } }
+        );
+
+        // Step 2 — Attach to item
+        await podioApi.post(`/file/${uploadResp.data.file_id}/attach`, {
+          ref_type: "item",
+          ref_id: item_id,
+        });
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: withRateLimit({
+                file_id: uploadResp.data.file_id,
+                name: uploadResp.data.name,
+                size: uploadResp.data.size,
+                mimetype: uploadResp.data.mimetype,
+                link: uploadResp.data.link,
+                attached_to_item: item_id,
+              }),
+            },
+          ],
+        };
+      } catch (err) {
+        log.error("podio_attach_file failed:", err);
         return toMcpError(err);
       }
     }
