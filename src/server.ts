@@ -11,6 +11,10 @@ import type {
   CreateItemResponse,
   PodioFilterResponse,
   PodioView,
+  PodioHook,
+  CreateHookResponse,
+  PodioComment,
+  AddCommentResponse,
 } from "./types/podio.js";
 
 function withRateLimit(data: unknown): string {
@@ -518,6 +522,200 @@ export function createServer(): McpServer {
         };
       } catch (err) {
         log.error("podio_filter_items_by_view failed:", err);
+        return toMcpError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "podio_add_comment",
+    {
+      title: "Add Comment",
+      description:
+        "Adds a text comment to a Podio item. Returns the new comment ID. " +
+        "Comments appear in the item's activity stream and notify followers.",
+      inputSchema: {
+        item_id: z.number().describe("The Podio item ID to comment on"),
+        text: z.string().describe("Comment text (plain text or rich text HTML)"),
+      },
+    },
+    async ({ item_id, text }) => {
+      log.info("podio_add_comment invoked", { item_id });
+      try {
+        const response = await podioApi.post<AddCommentResponse>(
+          `/comment/item/${item_id}/`,
+          { value: text }
+        );
+        return {
+          content: [{ type: "text" as const, text: withRateLimit(response.data) }],
+        };
+      } catch (err) {
+        log.error("podio_add_comment failed:", err);
+        return toMcpError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "podio_get_comments",
+    {
+      title: "Get Comments",
+      description:
+        "Retrieves all comments on a Podio item, sorted ascending by creation time. " +
+        "Each comment includes the author, timestamp, and text. " +
+        "Use limit/offset for pagination on items with many comments.",
+      inputSchema: {
+        item_id: z.number().describe("The Podio item ID to get comments for"),
+        limit: z.number().optional().describe("Max comments to return (default: 50)"),
+        offset: z.number().optional().describe("Number of comments to skip (default: 0)"),
+      },
+    },
+    async ({ item_id, limit, offset }) => {
+      log.info("podio_get_comments invoked", { item_id });
+      try {
+        const response = await podioApi.get<PodioComment[]>(
+          `/comment/item/${item_id}/`,
+          { params: { limit: limit ?? 50, offset: offset ?? 0 } }
+        );
+        return {
+          content: [{ type: "text" as const, text: withRateLimit(response.data) }],
+        };
+      } catch (err) {
+        log.error("podio_get_comments failed:", err);
+        return toMcpError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "podio_create_webhook",
+    {
+      title: "Create Webhook",
+      description:
+        "Creates a webhook on a Podio app or space. The webhook URL must be a publicly-reachable HTTPS endpoint " +
+        "you control (port 80 or 443). After creation, Podio sends a verification code to your URL. " +
+        "Your webhook receiver must call POST https://api.podio.com/hook/{hook_id}/verify/validate with {code} " +
+        "to activate the webhook. Valid event types for apps: item.create, item.update, item.delete. " +
+        "For spaces: app.create, task.create, task.update, task.delete, member.add, member.remove.",
+      inputSchema: {
+        ref_type: z
+          .enum(["app", "space"])
+          .describe("Object type to hook: 'app' or 'space'"),
+        ref_id: z.number().describe("App ID or Space ID to create the webhook on"),
+        url: z
+          .string()
+          .url()
+          .describe("Publicly-reachable webhook URL (must be HTTPS, port 80 or 443)"),
+        type: z
+          .string()
+          .describe(
+            "Event type: 'item.create', 'item.update', 'item.delete' (for apps), " +
+              "or 'app.create', 'task.create', etc. (for spaces)"
+          ),
+      },
+    },
+    async ({ ref_type, ref_id, url, type }) => {
+      log.info("podio_create_webhook invoked", { ref_type, ref_id, type });
+      try {
+        const createResp = await podioApi.post<CreateHookResponse>(
+          `/hook/${ref_type}/${ref_id}/`,
+          { url, type }
+        );
+        const hookId = createResp.data.hook_id;
+
+        try {
+          await podioApi.post(`/hook/${hookId}/verify/request`, {});
+        } catch (verifyErr) {
+          log.error("podio_create_webhook verify/request failed:", verifyErr);
+          return {
+            content: [
+              {
+                type: "text" as const,
+                text: withRateLimit({
+                  hook_id: hookId,
+                  status: "awaiting_verification",
+                  message:
+                    `Webhook created (ID: ${hookId}). WARNING: Verification request failed — ` +
+                    `you may need to manually trigger it. Once your endpoint receives the code, ` +
+                    `call POST https://api.podio.com/hook/${hookId}/verify/validate with {"code": "<the_code_podio_sent>"} and a Bearer token.`,
+                }),
+              },
+            ],
+          };
+        }
+
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: withRateLimit({
+                hook_id: hookId,
+                status: "awaiting_verification",
+                message:
+                  `Webhook created (ID: ${hookId}). Podio has sent a verification code to ${url}. ` +
+                  `Your webhook receiver must call POST https://api.podio.com/hook/${hookId}/verify/validate ` +
+                  `with {"code": "<the_code_podio_sent>"} and a Bearer token to activate it.`,
+              }),
+            },
+          ],
+        };
+      } catch (err) {
+        log.error("podio_create_webhook failed:", err);
+        return toMcpError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "podio_list_webhooks",
+    {
+      title: "List Webhooks",
+      description:
+        "Lists all webhooks registered on a Podio app or space. " +
+        "Returns each webhook's ID, status (active/inactive), event type, and URL.",
+      inputSchema: {
+        ref_type: z.enum(["app", "space"]).describe("Object type: 'app' or 'space'"),
+        ref_id: z.number().describe("App ID or Space ID"),
+      },
+    },
+    async ({ ref_type, ref_id }) => {
+      log.info("podio_list_webhooks invoked", { ref_type, ref_id });
+      try {
+        const response = await podioApi.get<PodioHook[]>(`/hook/${ref_type}/${ref_id}/`);
+        return {
+          content: [{ type: "text" as const, text: withRateLimit(response.data) }],
+        };
+      } catch (err) {
+        log.error("podio_list_webhooks failed:", err);
+        return toMcpError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "podio_delete_webhook",
+    {
+      title: "Delete Webhook",
+      description:
+        "Permanently deletes a webhook by ID. This stops all event deliveries to the webhook URL. Cannot be undone.",
+      inputSchema: {
+        hook_id: z.number().describe("Webhook ID (from podio_create_webhook or podio_list_webhooks)"),
+      },
+    },
+    async ({ hook_id }) => {
+      log.info("podio_delete_webhook invoked", { hook_id });
+      try {
+        await podioApi.delete(`/hook/${hook_id}`);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: withRateLimit({ deleted: true, hook_id }),
+            },
+          ],
+        };
+      } catch (err) {
+        log.error("podio_delete_webhook failed:", err);
         return toMcpError(err);
       }
     }
