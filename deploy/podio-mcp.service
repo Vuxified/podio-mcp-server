@@ -1,0 +1,20 @@
+[Unit]
+Description=Podio MCP Server (Streamable HTTP transport)
+After=network.target
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/podio-mcp-server
+# IMPORTANT: Use absolute path to node binary (nvm is not available in systemd PATH)
+# Find your path with: which node (after nvm use 22)
+ExecStart=/home/ec2-user/.nvm/versions/node/v22/bin/node dist/index.js
+Restart=on-failure
+RestartSec=10
+EnvironmentFile=/home/ec2-user/podio-mcp-server/.env
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=podio-mcp
+
+[Install]
+WantedBy=multi-user.target
