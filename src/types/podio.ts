@@ -144,3 +144,43 @@ export interface UploadFileResponse {
   mimetype: string;
   size: number;
 }
+
+// Search types
+
+export interface PodioSearchResultApp {
+  app_id: number;
+  name: string;
+  item_name: string;
+  icon: string;
+}
+
+export interface PodioSearchResultSpace {
+  space_id: number;
+  name: string;
+  url: string;
+}
+
+export interface PodioSearchResultOrg {
+  org_id: number;
+  name: string;
+  url: string;
+}
+
+export interface PodioSearchResultCreatedBy {
+  user_id: number;
+  name: string;
+  avatar?: string;
+}
+
+export interface PodioSearchResult {
+  type: "item" | "task" | "status" | "file" | "conversation" | "profile" | "app";
+  id: number;
+  rank: number;
+  title: string;
+  created_on: string;
+  created_by: PodioSearchResultCreatedBy;
+  link: string;
+  space?: PodioSearchResultSpace;
+  org?: PodioSearchResultOrg;
+  app?: PodioSearchResultApp;
+}
