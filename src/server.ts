@@ -18,6 +18,7 @@ import type {
   PodioComment,
   AddCommentResponse,
   UploadFileResponse,
+  PodioSearchResult,
 } from "./types/podio.js";
 
 function withRateLimit(data: unknown): string {
@@ -785,6 +786,108 @@ export function createServer(): McpServer {
         };
       } catch (err) {
         log.error("podio_attach_file failed:", err);
+        return toMcpError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "podio_search_global",
+    {
+      title: "Search Globally",
+      description:
+        "Searches across all accessible Podio content by keyword. " +
+        "Returns items, tasks, files, and other objects matching the query, each with a title, type, " +
+        "direct link, and app/space/org context. " +
+        "IMPORTANT: Results contain titles and context only — use podio_get_item to retrieve full field values. " +
+        "Max 20 results per call; use offset for pagination. " +
+        "NOTE: Rate-limited at 250 calls/hour (vs 1000/hour for other tools). " +
+        "This is the only way to search text fields — podio_filter_items cannot do text search.",
+      inputSchema: {
+        query: z.string().describe("Keyword or phrase to search for"),
+        ref_type: z
+          .enum(["item", "task", "file", "conversation", "profile", "app", "status"])
+          .optional()
+          .describe("Restrict results to a specific content type (optional)"),
+        limit: z
+          .number()
+          .optional()
+          .describe("Max results to return (default: 20, max: 20)"),
+        offset: z
+          .number()
+          .optional()
+          .describe("Pagination offset (default: 0)"),
+      },
+    },
+    async ({ query, ref_type, limit, offset }) => {
+      log.info("podio_search_global invoked", { query, ref_type });
+      try {
+        const response = await podioApi.get<PodioSearchResult[]>("/search/v2", {
+          params: {
+            query,
+            limit: Math.min(limit ?? 20, 20),
+            offset: offset ?? 0,
+            ...(ref_type ? { ref_type } : {}),
+          },
+        });
+        return {
+          content: [{ type: "text" as const, text: withRateLimit(response.data) }],
+        };
+      } catch (err) {
+        log.error("podio_search_global failed:", err);
+        return toMcpError(err);
+      }
+    }
+  );
+
+  server.registerTool(
+    "podio_search_app",
+    {
+      title: "Search in App",
+      description:
+        "Searches within a specific Podio app by keyword. " +
+        "Returns items and tasks matching the query, each with a title, type, and direct link. " +
+        "IMPORTANT: Results contain titles only — use podio_get_item to retrieve full field values. " +
+        "Max 20 results per call; use offset for pagination. " +
+        "NOTE: Rate-limited at 250 calls/hour.",
+      inputSchema: {
+        app_id: z
+          .number()
+          .describe("App ID to search within (from podio_list_apps)"),
+        query: z.string().describe("Keyword or phrase to search for"),
+        ref_type: z
+          .enum(["item", "task", "file", "status"])
+          .optional()
+          .describe("Restrict results to a specific content type (optional)"),
+        limit: z
+          .number()
+          .optional()
+          .describe("Max results to return (default: 20, max: 20)"),
+        offset: z
+          .number()
+          .optional()
+          .describe("Pagination offset (default: 0)"),
+      },
+    },
+    async ({ app_id, query, ref_type, limit, offset }) => {
+      log.info("podio_search_app invoked", { app_id, query, ref_type });
+      try {
+        const response = await podioApi.get<PodioSearchResult[]>(
+          `/search/app/${app_id}/v2`,
+          {
+            params: {
+              query,
+              limit: Math.min(limit ?? 20, 20),
+              offset: offset ?? 0,
+              ...(ref_type ? { ref_type } : {}),
+            },
+          }
+        );
+        return {
+          content: [{ type: "text" as const, text: withRateLimit(response.data) }],
+        };
+      } catch (err) {
+        log.error("podio_search_app failed:", err);
         return toMcpError(err);
       }
     }
