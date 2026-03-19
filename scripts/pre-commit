@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Only regenerate docs when src/ files are staged
+STAGED_SRC=$(git diff --cached --name-only | grep '^src/' || true)
+
+if [ -z "$STAGED_SRC" ]; then
+  exit 0
+fi
+
+echo "[docs] src/ changes detected — regenerating docs..."
+
+# Rebuild dist/ to pick up TypeScript changes
+npm run build --silent
+
+# Regenerate README tool reference
+npm run docs
+
+# Stage README.md if the generated section changed
+if ! git diff --quiet README.md 2>/dev/null; then
+  git add README.md
+  echo "[docs] README.md updated and staged"
+fi
+
+exit 0
