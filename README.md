@@ -75,27 +75,37 @@ npm run auth
 
 This opens a browser window, completes the OAuth2 flow (including Google SSO), and saves tokens to the path specified by `PODIO_TOKEN_PATH`.
 
-**4. Build and add to an MCP client Code:**
+**4. Build:**
 
 ```bash
 npm run build
 ```
 
-Add the following to your an MCP client Code MCP configuration (`your MCP client config` or equivalent):
+**5. Register with an MCP client Code (globally):**
 
-```json
-{
-  "mcpServers": {
-    "podio": {
-      "command": "node",
-      "args": ["/absolute/path/to/podio-mcp-server/dist/index.js"],
-      "env": {}
-    }
-  }
-}
+Use the `mcp add` CLI command to register at **user scope** so the server is available in all projects:
+
+```bash
+mcp add \
+  -e PODIO_CLIENT_ID=your_client_id \
+  -e PODIO_CLIENT_SECRET=your_client_secret \
+  -e PODIO_REDIRECT_URI=http://localhost:8888/callback \
+  -e PODIO_TOKEN_PATH=/absolute/path/to/podio-mcp-server/.podio-tokens.json \
+  -s user \
+  podio-mcp \
+  -- node /absolute/path/to/podio-mcp-server/dist/index.js
 ```
 
-Replace `/absolute/path/to` with the actual path to your clone. Run `npm run build` first if `dist/` does not exist.
+Replace `/absolute/path/to` with the actual path to your clone.
+
+> **Important:** Do NOT manually edit `your MCP client config` or `your MCP client config` — an MCP client Code stores MCP config in `your MCP client config` and the `mcp add` command is the only reliable way to register servers. Using `-s user` makes the server available globally across all projects. Without it, the server only works in the current project.
+
+Verify it registered correctly:
+
+```bash
+mcp get podio-mcp
+# Should show: Status: ✓ Connected, Args: /path/to/dist/index.js, Environment: all 4 vars
+```
 
 ---
 
@@ -273,7 +283,9 @@ Returns full app details including all field definitions with types, settings, a
 
 **Create Item**
 
-Creates a new item in a Podio app. The fields object maps field external_ids (or field_ids) to values. IMPORTANT: Call podio_get_app first to learn field types and option IDs. Field format varies by type: text='string', number=42, date={start:'YYYY-MM-DD'}, category=option_id (integer from app field settings), money={value:100,currency:'USD'}, app_reference=[{item_id:123}].
+Creates a new item in a Podio app. The fields object maps field external_ids (or field_ids) to values. IMPORTANT: Call podio_get_app first to learn field types and option IDs. Field format varies by type: text='string', number=42, date={start:'YYYY-MM-DD'}, category=option_id (integer from app field settings), money={value:100,currency:'USD'}, app_reference=[item_id_1, item_id_2] (array of integer item IDs).
+
+DUPLICATE DETECTION: Before creating, this tool automatically searches for potential duplicates using text field values. If duplicates are found, the item is NOT created — instead, the matches are returned with their item_ids. You MUST automatically use the existing item_ids from the matches instead of creating new items. Only use skip_duplicate_check=true if the user explicitly says to create a new/separate record despite the duplicate.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -281,6 +293,7 @@ Creates a new item in a Podio app. The fields object maps field external_ids (or
 | `fields` | `object` | Yes | Field values keyed by external_id or field_id. Use podio_get_app to learn field types and option IDs. Examples: text='string', number=42, date={start:'2026-04-01'}, category=option_id, money={value:100,currency:'USD'} |
 | `tags` | `string[]` | No | Optional tags to apply to the item |
 | `silent` | `boolean` | No | If true, no notifications are generated (default: false) |
+| `skip_duplicate_check` | `boolean` | No | If true, skip duplicate detection and create immediately (default: false) |
 
 **Example:**
 ```json
