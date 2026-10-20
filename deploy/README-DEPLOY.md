@@ -146,18 +146,18 @@ curl -s https://YOUR_DOMAIN/mcp
 
 ---
 
-## 7. an MCP client Code Configuration
+## 7. MCP Client Configuration
 
-Add the remote MCP server to an MCP client Code:
+Add the remote MCP server to your client:
 ```json
 {
   "mcpServers": {
     "podio-remote": {
       "type": "streamableHttp",
-      "url": "https://YOUR_DOMAIN/mcp"
+      "url": "https://YOUR_DOMAIN/mcp",
+      "headers": { "Authorization": "Bearer <MCP_AUTH_TOKEN>" }
     }
   }
 }
 ```
 
-Run `mcp add --transport streamable-http podio-remote https://YOUR_DOMAIN/mcp` or edit `your MCP client config` directly.

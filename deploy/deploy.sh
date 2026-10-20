@@ -7,7 +7,8 @@ INSTANCE_TYPE="t3.micro"
 KEY_NAME="n8n-access-key"
 KEY_PATH="$HOME/.ssh/n8n-access-key.pem"
 REGION="us-east-1"
-DOMAIN="mcp.example.com"
+DOMAIN="${DEPLOY_DOMAIN:?Set DEPLOY_DOMAIN, e.g. mcp.example.com}"
+CERTBOT_EMAIL="${CERTBOT_EMAIL:?Set CERTBOT_EMAIL for Certbot notices}"
 APP_DIR="/home/ec2-user/podio-mcp-server"
 
 # Track whether we provisioned a new instance this run
@@ -137,9 +138,9 @@ PUBLIC_IP=$(aws ec2 describe-addresses \
 echo "[deploy] Elastic IP associated: $PUBLIC_IP"
 echo ""
 
-# ── 1d. DNS check (Vercel-managed) ────────────────────────────────────────────
-# DNS for example.com is managed via Vercel, not Route53.
-# The Elastic IP is static, so DNS only needs to be set once in Vercel dashboard.
+# ── 1d. DNS check ────────────────────────────────────────────────────────────
+# DNS is managed outside AWS (no Route53). The Elastic IP is static,
+# so the A record only needs to be set once at your DNS provider.
 echo "[deploy] Checking DNS for $DOMAIN..."
 
 CURRENT_DNS=$(dig +short "$DOMAIN" A 2>/dev/null | head -1 || true)
@@ -148,10 +149,10 @@ if [ "$CURRENT_DNS" = "$PUBLIC_IP" ]; then
   echo "[deploy] DNS OK: $DOMAIN -> $PUBLIC_IP"
 else
   echo "[deploy] ⚠ DNS mismatch: $DOMAIN -> ${CURRENT_DNS:-<no record>} (expected $PUBLIC_IP)"
-  echo "[deploy] Update the A record for $DOMAIN in Vercel DNS dashboard to: $PUBLIC_IP"
+  echo "[deploy] Update the A record for $DOMAIN at your DNS provider to: $PUBLIC_IP"
   if [ "$NEWLY_PROVISIONED" = "true" ]; then
     echo "[deploy] Waiting for DNS update — Certbot needs $DOMAIN to resolve to $PUBLIC_IP"
-    echo "[deploy] Update DNS in Vercel now, then press Enter to continue..."
+    echo "[deploy] Update DNS now, then press Enter to continue..."
     read -r
   fi
 fi
@@ -223,7 +224,7 @@ echo ""
 echo "[deploy] Running remote setup on EC2..."
 echo ""
 
-ssh $SSH_OPTS "ec2-user@$PUBLIC_IP" DEPLOY_DOMAIN="$DOMAIN" APP_DIR="$APP_DIR" bash << 'REMOTE'
+ssh $SSH_OPTS "ec2-user@$PUBLIC_IP" DEPLOY_DOMAIN="$DOMAIN" CERTBOT_EMAIL="$CERTBOT_EMAIL" APP_DIR="$APP_DIR" bash << 'REMOTE'
 set -euo pipefail
 
 echo "[remote] Installing Node.js 22..."
@@ -258,7 +259,7 @@ fi
 echo "[remote] Obtaining/renewing SSL certificate..."
 sudo certbot --nginx \
   -d "$DEPLOY_DOMAIN" \
-  --email admin@example.com \
+  --email "$CERTBOT_EMAIL" \
   --agree-tos \
   --non-interactive \
   --keep-until-expiring \

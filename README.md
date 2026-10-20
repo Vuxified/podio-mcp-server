@@ -1,6 +1,6 @@
 # Podio MCP Server
 
-An MCP server that gives an MCP client direct access to the Podio API — create, read, update, delete items and more through natural language.
+An MCP server for the Podio API. Any MCP client can list, create, read, update, delete and search Podio items, comments, webhooks and files.
 
 ![Node.js 22+](https://img.shields.io/badge/node-22%2B-green) ![License: MIT](https://img.shields.io/badge/license-MIT-blue) ![Tools: 20](https://img.shields.io/badge/tools-20-orange)
 
@@ -14,6 +14,7 @@ An MCP server that gives an MCP client direct access to the Podio API — create
 - [Architecture](#architecture)
 - [Tool Reference](#tool-reference)
 - [Workflow Examples](#workflow-examples)
+- [Limitations](#limitations)
 - [Contributing](#contributing)
 
 ---
@@ -24,7 +25,7 @@ An MCP server that gives an MCP client direct access to the Podio API — create
 
 ```bash
 # 1. Clone and enter the project
-git clone https://github.com/your-username/podio-mcp-server.git
+git clone https://github.com/Vuxified/podio-mcp-server.git
 cd podio-mcp-server
 
 # 2. Install dependencies
@@ -48,7 +49,7 @@ npm start
 
 ## Setup — Local (stdio)
 
-The stdio transport is the default mode and is used with MCP clients running locally.
+The stdio transport is the default mode, for MCP clients that launch the server locally.
 
 **1. Create `.env` from the template:**
 
@@ -81,31 +82,28 @@ This opens a browser window, completes the OAuth2 flow (including Google SSO), a
 npm run build
 ```
 
-**5. Register with an MCP client Code (globally):**
+**5. Register with your MCP client:**
 
-Use the `mcp add` CLI command to register at **user scope** so the server is available in all projects:
+Most clients take a JSON config like this:
 
-```bash
-mcp add \
-  -e PODIO_CLIENT_ID=your_client_id \
-  -e PODIO_CLIENT_SECRET=your_client_secret \
-  -e PODIO_REDIRECT_URI=http://localhost:8888/callback \
-  -e PODIO_TOKEN_PATH=/absolute/path/to/podio-mcp-server/.podio-tokens.json \
-  -s user \
-  podio-mcp \
-  -- node /absolute/path/to/podio-mcp-server/dist/index.js
+```json
+{
+  "mcpServers": {
+    "podio": {
+      "command": "node",
+      "args": ["/absolute/path/to/podio-mcp-server/dist/index.js"],
+      "env": {
+        "PODIO_CLIENT_ID": "your_client_id",
+        "PODIO_CLIENT_SECRET": "your_client_secret",
+        "PODIO_REDIRECT_URI": "http://localhost:8888/callback",
+        "PODIO_TOKEN_PATH": "/absolute/path/to/podio-mcp-server/.podio-tokens.json"
+      }
+    }
+  }
+}
 ```
 
 Replace `/absolute/path/to` with the actual path to your clone.
-
-> **Important:** Do NOT manually edit `your MCP client config` or `your MCP client config` — an MCP client Code stores MCP config in `your MCP client config` and the `mcp add` command is the only reliable way to register servers. Using `-s user` makes the server available globally across all projects. Without it, the server only works in the current project.
-
-Verify it registered correctly:
-
-```bash
-mcp get podio-mcp
-# Should show: Status: ✓ Connected, Args: /path/to/dist/index.js, Environment: all 4 vars
-```
 
 ---
 
@@ -125,16 +123,21 @@ The remote mode runs the server on an EC2 instance behind Nginx with SSL, and co
 npm run deploy
 ```
 
-This script automates the full deployment: EC2 instance provisioning, Node.js 22 installation, Nginx reverse proxy configuration, Certbot SSL certificates, and systemd service setup. The default domain is `mcp.example.com` — change it in `deploy/deploy.sh` before running.
+This script automates the full deployment: EC2 instance provisioning, Node.js 22 installation, Nginx reverse proxy configuration, Certbot SSL certificates, and systemd service setup. Set `DEPLOY_DOMAIN` and `CERTBOT_EMAIL` before running:
 
-**2. Add to an MCP client Code (remote config):**
+```bash
+DEPLOY_DOMAIN=mcp.example.com CERTBOT_EMAIL=you@example.com npm run deploy
+```
+
+**2. Point your MCP client at the remote server:**
 
 ```json
 {
   "mcpServers": {
     "podio-remote": {
       "type": "streamableHttp",
-      "url": "https://mcp.example.com/mcp"
+      "url": "https://mcp.example.com/mcp",
+      "headers": { "Authorization": "Bearer <MCP_AUTH_TOKEN>" }
     }
   }
 }
@@ -147,7 +150,7 @@ This script automates the full deployment: EC2 instance provisioning, Node.js 22
 ## Architecture
 
 ```
-an MCP client (Desktop/Code)
+MCP client
   │
   ▼
 MCP Protocol (stdio or Streamable HTTP)
@@ -669,6 +672,18 @@ Searches within a specific Podio app by keyword. Returns items and tasks matchin
 3. podio_add_comment({ item_id: 55555, text: "Checklist attached for review" })
    → comment posted
 ```
+
+## Limitations
+
+- **Single Podio account.** One OAuth token file per server process. There is no multi-user or per-request auth to Podio.
+- **Podio rate limits apply.** 1000 calls/hour for most endpoints, 250/hour for filter and search. The server reports the remaining budget in `_meta` but does not queue or retry for you.
+- **Search returns titles only.** `podio_search_global` and `podio_search_app` return at most 20 hits per call. Use `podio_get_item` for field values.
+- **Field formats are strict.** Podio rejects values in the wrong shape. Call `podio_get_app` first to learn field types and category option IDs.
+- **Destructive tools are exposed.** `podio_delete_item`, `podio_delete_webhook` and the update tools act immediately with no confirmation step. Gate them in your client if that matters.
+- **Remote auth is a single shared bearer token** (`MCP_AUTH_TOKEN`). If it is unset, the HTTP endpoint is open, so only leave it blank for local development.
+- **Tokens are stored as plain JSON** at `PODIO_TOKEN_PATH`. Keep that file out of version control and `chmod 600` it on servers.
+- **The deploy script targets AWS EC2 + Amazon Linux 2023 + Nginx/Certbot.** Other hosts need manual setup.
+- **No automated test suite yet.**
 
 ---
 

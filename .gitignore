@@ -3,3 +3,5 @@ dist/
 .env
 .podio-tokens.json
 *.log
+
+.DS_Store
