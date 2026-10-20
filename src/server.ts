@@ -21,6 +21,33 @@ import type {
   PodioSearchResult,
 } from "./types/podio.js";
 
+/**
+ * Normalize field values to the format Podio's API actually accepts.
+ * Handles common mismatches like app reference objects → plain item ID arrays.
+ */
+function normalizeFields(
+  fields: Record<string, unknown>
+): Record<string, unknown> {
+  const normalized: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(fields)) {
+    normalized[key] = normalizeFieldValue(value);
+  }
+  return normalized;
+}
+
+function normalizeFieldValue(value: unknown): unknown {
+  // App reference fields: convert [{item_id: 123}] → [123]
+  if (Array.isArray(value)) {
+    const allItemIdObjects = value.length > 0 && value.every(
+      (v) => typeof v === "object" && v !== null && "item_id" in v
+    );
+    if (allItemIdObjects) {
+      return value.map((v) => (v as { item_id: number }).item_id);
+    }
+  }
+  return value;
+}
+
 function withRateLimit(data: unknown): string {
   return JSON.stringify({
     data,
@@ -191,7 +218,12 @@ export function createServer(): McpServer {
         "IMPORTANT: Call podio_get_app first to learn field types and option IDs. " +
         "Field format varies by type: text='string', number=42, date={start:'YYYY-MM-DD'}, " +
         "category=option_id (integer from app field settings), money={value:100,currency:'USD'}, " +
-        "app_reference=[{item_id:123}].",
+        "app_reference=[item_id_1, item_id_2] (array of integer item IDs).\n\n" +
+        "DUPLICATE DETECTION: Before creating, this tool automatically searches for potential duplicates " +
+        "using text field values. If duplicates are found, the item is NOT created — instead, the matches " +
+        "are returned with their item_ids. You MUST automatically use the existing item_ids from the matches " +
+        "instead of creating new items. Only use skip_duplicate_check=true if the user explicitly says " +
+        "to create a new/separate record despite the duplicate.",
       inputSchema: {
         app_id: z.number().describe("App ID to create the item in"),
         fields: z
@@ -205,14 +237,90 @@ export function createServer(): McpServer {
           .boolean()
           .optional()
           .describe("If true, no notifications are generated (default: false)"),
+        skip_duplicate_check: z
+          .boolean()
+          .optional()
+          .describe("If true, skip duplicate detection and create immediately (default: false)"),
       },
     },
-    async ({ app_id, fields, tags, silent }) => {
+    async ({ app_id, fields, tags, silent, skip_duplicate_check }) => {
       log.info("podio_create_item invoked", { app_id });
       try {
+        // --- Duplicate detection ---
+        if (!skip_duplicate_check) {
+          // 1. Fetch app schema to learn field types
+          const appResponse = await podioApi.get<PodioApp>(`/app/${app_id}`, {
+            params: { type: "full" },
+          });
+          const appFields = appResponse.data.fields;
+
+          // 2. Build search queries from text fields being set
+          const textQueries: string[] = [];
+          for (const [key, value] of Object.entries(fields)) {
+            if (typeof value !== "string") continue;
+            const fieldDef = appFields.find(
+              (f) => f.external_id === key || String(f.field_id) === key
+            );
+            if (fieldDef && fieldDef.type === "text") {
+              textQueries.push(value);
+            }
+          }
+
+          // 3. Search the target app for each text value
+          const duplicates: Array<{ query: string; matches: PodioSearchResult[] }> = [];
+          for (const query of textQueries) {
+            if (query.trim().length < 2) continue;
+            try {
+              const searchResponse = await podioApi.get<PodioSearchResult[]>(
+                `/search/app/${app_id}/v2`,
+                { params: { query, limit: 5, ref_type: "item" } }
+              );
+              if (searchResponse.data.length > 0) {
+                duplicates.push({ query, matches: searchResponse.data });
+              }
+            } catch {
+              // Search failed — don't block creation for a search error
+              log.warn("Duplicate check search failed for query:", query);
+            }
+          }
+
+          // 4. If duplicates found, return them instead of creating
+          if (duplicates.length > 0) {
+            const dupReport = duplicates.map((d) => ({
+              searched_for: d.query,
+              potential_matches: d.matches.map((m) => ({
+                item_id: m.id,
+                title: m.title,
+                link: m.link,
+              })),
+            }));
+            return {
+              content: [
+                {
+                  type: "text" as const,
+                  text: JSON.stringify({
+                    warning: "DUPLICATE_DETECTED",
+                    message:
+                      "Potential duplicates found — item was NOT created. " +
+                      "Use the existing item_ids from the matches below instead of creating new items. " +
+                      "Only create new items if the user explicitly requests a separate record.",
+                    potential_duplicates: dupReport,
+                    _meta: {
+                      rate_limit_remaining: lastRateLimit.remaining,
+                      rate_limit_total: lastRateLimit.limit,
+                    },
+                  }),
+                },
+              ],
+            };
+          }
+        }
+
+        // --- No duplicates (or check skipped) — create the item ---
+        const normalizedFields = normalizeFields(fields);
         const response = await podioApi.post<CreateItemResponse>(
           `/item/app/${app_id}/`,
-          { fields, tags, silent }
+          { fields: normalizedFields, tags, silent }
         );
         return {
           content: [{ type: "text" as const, text: withRateLimit(response.data) }],
@@ -295,8 +403,9 @@ export function createServer(): McpServer {
     async ({ item_id, fields, silent }) => {
       log.info("podio_update_item invoked", { item_id });
       try {
+        const normalizedFields = normalizeFields(fields);
         const response = await podioApi.put<unknown>(`/item/${item_id}`, {
-          fields,
+          fields: normalizedFields,
           silent,
         });
         return {

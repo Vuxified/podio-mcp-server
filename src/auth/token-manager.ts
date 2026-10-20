@@ -1,7 +1,7 @@
-import "dotenv/config";
 import axios from "axios";
 import fs from "fs/promises";
 import path from "path";
+import { fileURLToPath } from "url";
 import { log } from "../utils/logger.js";
 
 interface TokenStore {
@@ -13,11 +13,22 @@ interface TokenStore {
 const PODIO_TOKEN_URL = "https://api.podio.com/oauth/token/v2";
 const REFRESH_BUFFER_MS = 5 * 60 * 1000;
 
+// Project root resolved from this file's location (__dirname = dist/auth, so two levels up)
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const PROJECT_ROOT = path.resolve(__dirname, "..", "..");
+
 export class TokenManager {
   private store: TokenStore | null = null;
 
   private get tokenPath(): string {
-    return path.resolve(process.env.PODIO_TOKEN_PATH ?? ".podio-tokens.json");
+    const configured = process.env.PODIO_TOKEN_PATH;
+    if (configured && path.isAbsolute(configured)) {
+      // Absolute path — use as-is (e.g. set by EC2 deploy environment)
+      return configured;
+    }
+    // Relative path or default — resolve against project root (not CWD)
+    return path.resolve(PROJECT_ROOT, configured ?? ".podio-tokens.json");
   }
 
   async getValidToken(): Promise<string> {
